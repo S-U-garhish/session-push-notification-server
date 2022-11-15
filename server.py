@@ -25,7 +25,7 @@ urllib3.disable_warnings()
 
 def handle_exit(sig, frame):
     PN_helper_v2.stop()
-    observer.stop()
+    #observer.stop()
     database_helper.flush()
     loop.stop()
     raise SystemExit
@@ -33,16 +33,16 @@ def handle_exit(sig, frame):
 
 app = Flask(__name__)
 auth = HTTPBasicAuth()
-password_hash = generate_password_hash("^nfe+Lv+2d-2W!B8A+E-rdy^UJmq5#8D")  # your password
+password_hash = generate_password_hash("w3b)W64#45BWh&UNSR#Tn_s?")  # your password
 logger = LokiLogger().logger
-observer = Observer(logger)
+#observer = (logger)
 database_helper = DatabaseHelperV2(logger)
 loop = IOLoop.instance()
 signal.signal(signal.SIGTERM, handle_exit)
 
 
 # PN approach V2 #
-PN_helper_v2 = PushNotificationHelperV2(logger, database_helper, observer)
+PN_helper_v2 = PushNotificationHelperV2(logger, database_helper, observer=None)
 
 
 def register_v2(args):
@@ -266,7 +266,7 @@ def get_statistics_data():
 
 if __name__ == '__main__':
     database_helper.populate_cache()
-    observer.run()
+    #observer.run()
     PN_helper_v2.run()
     port = 3000 if debug_mode else 5000
     http_server = HTTPServer(WSGIContainer(app), no_keep_alive=True)

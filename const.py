@@ -40,11 +40,11 @@ CLOSED_GROUP_TABLE = 'closed_group_table'
 STATISTICS_TABLE = 'statistics_table'
 PUBKEY_TOKEN_DB_V2 = 'token_pubkey_db_v2'
 CLOSED_GROUP_DB = 'closed_group_db'
-CERT_FILE = 'cert.pem'
+CERT_FILE = 'zilafapns.pem'
 PRIVKEY_FILE = 'x25519-priv.pem'
 FIREBASE_TOKEN = 'loki-5a81e-firebase-adminsdk-7plup-0698317995.json'
 
-BUNDLE_ID = 'com.loki-project.loki-messenger'
+BUNDLE_ID = 'com.gmtec-inc.ZILAF'
 
 debug_mode = False
 

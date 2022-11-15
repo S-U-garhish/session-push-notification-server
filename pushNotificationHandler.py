@@ -18,12 +18,12 @@ class PushNotificationHelperV2:
     # Init #
     def __init__(self, logger, database_helper, observer):
         self.apns = APNsClient(CERT_FILE, use_sandbox=debug_mode, use_alternative_port=False)
-        self.firebase_app = firebase_admin.initialize_app(credentials.Certificate(FIREBASE_TOKEN))
+        #self.firebase_app = firebase_admin.initialize_app(credentials.Certificate(FIREBASE_TOKEN))
         self.message_queue = Queue()
         self.push_fails = {}
         self.logger = logger
         self.database_helper = database_helper
-        self.observer = observer
+        #self.observer = observer
         self.stop_running = False
         self.thread = Thread(target=self.run_push_notification_task)
         self.db_thread = Thread(target=self.run_sync_to_db_task)
@@ -37,7 +37,7 @@ class PushNotificationHelperV2:
             current_data = self.stats_data.copy()
             self.stats_data.reset(now)
             self.database_helper.store_stats_data_async(current_data)
-            self.observer.push_statistic_data(current_data, now)
+            #self.observer.push_statistic_data(current_data, now)
 
     # Database backup #
     def back_up_data_if_needed(self):
@@ -47,7 +47,7 @@ class PushNotificationHelperV2:
             self.logger.info(info)
             self.database_helper.back_up_database_async()
             self.database_helper.last_backup = now
-            self.observer.push_info(info)
+            #self.observer.push_info(info)
 
     # Registration #
     def remove_device_token(self, device_token):
@@ -111,13 +111,13 @@ class PushNotificationHelperV2:
                     self.back_up_data_if_needed()
                     if self.stop_running:
                         return
-                self.observer.check_push_notification(self.stats_data)
+                #self.observer.check_push_notification(self.stats_data)
                 # Flush cache to database every 3 minutes
                 self.database_helper.flush_async()
             except Exception as e:
                 error_message = f"Flush exception: {e}"
                 self.logger.error(error_message)
-                self.observer.push_error(error_message)
+                #self.observer.push_error(error_message)
 
     # Send PNs #
     def add_message_to_queue(self, message):
@@ -181,11 +181,11 @@ class PushNotificationHelperV2:
                     self.logger.info(f'Ignore message to {recipient}.')
         try:
             self.execute_push_ios(notifications_ios, NotificationPriority.Immediate)
-            self.execute_push_android(notifications_android)
+            #self.execute_push_android(notifications_android)
         except Exception as e:
             self.logger.info('Something wrong happened when try to push notifications.')
             self.logger.exception(e)
-
+    """
     def execute_push_android(self, notifications):
         if len(notifications) == 0:
             return
@@ -209,7 +209,7 @@ class PushNotificationHelperV2:
                     self.handle_fail_result(token, ("HttpError", ""))
                 else:
                     self.push_fails[token] = 0
-
+    """
     def execute_push_ios(self, notifications, priority):
         if len(notifications) == 0:
             return
@@ -221,15 +221,16 @@ class PushNotificationHelperV2:
                                                         priority=priority, push_type=NotificationType.Alert)
         except ConnectionFailed:
             self.logger.error('Connection failed')
-            self.execute_push_ios(notifications, priority)
+            #self.execute_push_ios(notifications, priority)
         except Exception as e:
             self.logger.exception(e)
-            self.execute_push_ios(notifications, priority)
+            #self.execute_push_ios(notifications, priority)
         for token, result in results.items():
             if result != 'Success':
                 self.handle_fail_result(token, result)
             else:
                 self.push_fails[token] = 0
+        self.logger.info("execute_push_ios finished")
 
     # Tasks #
     async def create_push_notification_task(self):
