@@ -1,13 +1,13 @@
 from queue import *
 import asyncio
 from threading import Thread
-from PyAPNs.apns2.client import APNsClient, NotificationPriority, Notification, NotificationType
-from PyAPNs.apns2.payload import Payload, PayloadAlert
-from PyAPNs.apns2.errors import *
+from uuid import uuid4
+from aioapns import APNs, NotificationRequest, PushType
+from aioapns.common import NotificationResult
 from utils import *
-import firebase_admin
-from firebase_admin import credentials, messaging
-from firebase_admin.exceptions import *
+#import firebase_admin
+#from firebase_admin import credentials, messaging
+#from firebase_admin.exceptions import *
 from databaseModelV2 import *
 from databaseHelperV2 import *
 from pushNotificationStats import *
@@ -17,16 +17,16 @@ from pushNotificationStats import *
 class PushNotificationHelperV2:
     # Init #
     def __init__(self, logger, database_helper, observer):
-        self.apns = APNsClient(CERT_FILE, use_sandbox=debug_mode, use_alternative_port=False)
-        self.firebase_app = firebase_admin.initialize_app(credentials.Certificate(FIREBASE_TOKEN))
+        self.apns = APNs(
+            client_cert='./apns-cert.pem',
+            use_sandbox=False)
+        #self.firebase_app = firebase_admin.initialize_app(credentials.Certificate(FIREBASE_TOKEN))
         self.message_queue = Queue()
         self.push_fails = {}
         self.logger = logger
         self.database_helper = database_helper
-        self.observer = observer
+        #self.observer = observer
         self.stop_running = False
-        self.thread = Thread(target=self.run_push_notification_task)
-        self.db_thread = Thread(target=self.run_sync_to_db_task)
         self.stats_data = PushNotificationStats()
 
     # Statistics #
@@ -37,7 +37,7 @@ class PushNotificationHelperV2:
             current_data = self.stats_data.copy()
             self.stats_data.reset(now)
             self.database_helper.store_stats_data_async(current_data)
-            self.observer.push_statistic_data(current_data, now)
+            #self.observer.push_statistic_data(current_data, now)
 
     # Database backup #
     def back_up_data_if_needed(self):
@@ -46,7 +46,8 @@ class PushNotificationHelperV2:
             info = f"Back up database at {now}.\n"
             self.logger.info(info)
             self.database_helper.back_up_database_async()
-            self.observer.push_info(info)
+            self.database_helper.last_backup = now
+            #self.observer.push_info(info)
 
     # Registration #
     def remove_device_token(self, device_token):
@@ -111,13 +112,13 @@ class PushNotificationHelperV2:
                     if self.stop_running:
                         return
                 self.logger.info(f"Start to sync to DB at {datetime.now()}.")
-                self.observer.check_push_notification(self.stats_data)
+                #self.observer.check_push_notification(self.stats_data)
                 # Flush cache to database every 3 minutes
                 self.database_helper.flush_async()
             except Exception as e:
                 error_message = f"Flush exception: {e}"
                 self.logger.error(error_message)
-                self.observer.push_error(error_message)
+                #self.observer.push_error(error_message)
             self.logger.info(f"End of flush at {datetime.now()}.")
 
     # Send PNs #
@@ -134,10 +135,13 @@ class PushNotificationHelperV2:
 
     async def loop_message_queue(self):
         while not self.stop_running:
-            self.send_push_notification()
+            #self.logger.info("loop_message_queue")
+            await self.send_push_notification()
             await asyncio.sleep(0.5)
+            
+            
 
-    def send_push_notification(self):
+    async def send_push_notification(self):
         if self.message_queue.empty() or self.stop_running:
             return
         # Get at most 1000 messages every second
@@ -150,13 +154,22 @@ class PushNotificationHelperV2:
                 device_for_push = self.database_helper.get_device(session_id)
                 if device_for_push:
                     for device_token in device_for_push.tokens:
-                        if is_ios_device_token(device_token):
-                            alert = PayloadAlert(title='Session', body='You\'ve got a new message')
-                            payload = Payload(alert=alert, badge=1, sound="default",
-                                              mutable_content=True, category="SECRET",
-                                              custom={'ENCRYPTED_DATA': message['data'],
-                                                      'remote': 1})
-                            notifications_ios.append(Notification(token=device_token, payload=payload))
+                        #self.logger.info(device_token)
+                        if True:
+                            request = NotificationRequest(
+                                device_token=device_token,
+                                message = {
+                                    "aps": {
+                                        "alert": "ZILLAF - You\'ve got a new message",
+                                        "badge": "1",
+                                    }
+                                },
+                                notification_id=str(uuid4()),  # optional
+                                time_to_live=3,                # optional
+                                push_type=PushType.ALERT,      # optional
+                                )
+                            #self.logger.info(f'request is {request.device_token}.')
+                            notifications_ios.append(request)
                         else:
                             notification = messaging.Message(data={'ENCRYPTED_DATA': message['data']},
                                                              token=device_token,
@@ -181,56 +194,34 @@ class PushNotificationHelperV2:
                 if debug_mode:
                     self.logger.info(f'Ignore message to {recipient}.')
         try:
-            self.execute_push_ios(notifications_ios, NotificationPriority.Immediate)
-            self.execute_push_android(notifications_android)
+            #self.logger.info(f'Notification length = {len(notifications_ios)}.')
+            await self.execute_push_ios(notifications_ios)
+            #self.execute_push_android(notifications_android)
         except Exception as e:
             self.logger.info('Something wrong happened when try to push notifications.')
             self.logger.exception(e)
 
-    def execute_push_android(self, notifications):
-        if len(notifications) == 0:
-            return
-        self.logger.info(f"Push {len(notifications)} notifications for Android.")
-        self.stats_data.increment_android_pn(len(notifications))
-        results = None
-        try:
-            results = messaging.send_all(messages=notifications, app=self.firebase_app)
-        except FirebaseError as e:
-            self.logger.error(e.cause)
-        except Exception as e:
-            self.logger.exception(e)
-
-        if results is not None:
-            for i in range(len(notifications)):
-                response = results.responses[i]
-                token = notifications[i].token
-                if not response.success:
-                    error = response.exception
-                    self.logger.exception(error)
-                    self.handle_fail_result(token, ("HttpError", ""))
-                else:
-                    self.push_fails[token] = 0
-
-    def execute_push_ios(self, notifications, priority):
+    async def execute_push_ios(self, notifications):
         if len(notifications) == 0:
             return
         self.logger.info(f"Push {len(notifications)} notifications for iOS.")
         self.stats_data.increment_ios_pn(len(notifications))
-        results = {}
+        
         try:
-            results = self.apns.send_notification_batch(notifications=notifications, topic=BUNDLE_ID,
-                                                        priority=priority, push_type=NotificationType.Alert)
-        except ConnectionFailed:
-            self.logger.error('Connection failed')
-            self.execute_push_ios(notifications, priority)
+            for notification in notifications:
+                response: NotificationResult = await self.apns.send_notification(notification)
+
+                if response.is_successful:
+                    self.logger.info(f"Push to {notification.device_token} succeeded.")
+                    self.push_fails[notification.device_token] = 0
+                else:
+                    self.logger.warning(
+                        f"Push to {notification.device_token} failed: "
+                        f"{response.status} - {response.description}"
+                    )
+                    self.handle_fail_result(notification.device_token, response)
         except Exception as e:
-            self.logger.exception(e)
-            self.execute_push_ios(notifications, priority)
-        for token, result in results.items():
-            if result != 'Success':
-                self.handle_fail_result(token, result)
-            else:
-                self.push_fails[token] = 0
+            self.logger.exception("Unexpected error during push:", exc_info=e)
 
     # Tasks #
     async def create_push_notification_task(self):
@@ -248,20 +239,26 @@ class PushNotificationHelperV2:
         await task
 
     def run_push_notification_task(self):
-        asyncio.run(self.create_push_notification_task())
+        asyncio.create_task(self.create_push_notification_task())
 
     def run_sync_to_db_task(self):
-        asyncio.run(self.create_sync_to_db_task())
+        asyncio.create_task(self.create_sync_to_db_task())
 
-    def run(self):
+    async def run(self):
         self.logger.info(f'{self.__class__.__name__} start running...')
         self.stop_running = False
-        self.thread.start()
-        self.db_thread.start()
+        # 非同期タスクを作成（スレッド不要）
+        self.push_task = asyncio.create_task(self.loop_message_queue())
+        self.sync_task = asyncio.create_task(self.sync_to_db())
 
-    def stop(self):
+    async def stop(self):
         self.logger.info(f'{self.__class__.__name__} stop running...')
         self.stop_running = True
+        # 並列タスクの終了を待機
+        if self.push_task:
+            await self.push_task
+        if self.sync_task:
+            await self.sync_task
         self.database_helper.flush()
 
     # Error handler #
@@ -273,8 +270,9 @@ class PushNotificationHelperV2:
 
         if self.push_fails[key] > 5:
             self.remove_device_token(key)
-        if isinstance(result, tuple):
-            reason, info = result
+        if isinstance(result, NotificationResult):
+            reason = result.status
+            info = result.description
             self.logger.warning(f"Push fail {reason} {info}.")
         else:
             self.logger.warning("Push fail for unknown reason.")
