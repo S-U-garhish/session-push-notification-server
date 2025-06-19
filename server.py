@@ -105,7 +105,7 @@ def unregister():
 @app.route('/subscribe_closed_group', methods=[POST])
 def subscribe_closed_group():
     args = receive_encrypted_body(request)
-    closed_group_id = None
+    closed_group_id = []
     session_id = None
     if PUBKEY in args:
         session_id = args[PUBKEY]
@@ -128,14 +128,15 @@ def subscribe_closed_group():
 @app.route('/unsubscribe_closed_group', methods=[POST])
 def unsubscribe_closed_group():
     args = receive_encrypted_body(request)
-    closed_group_id = None
+    closed_group_id = []
     session_id = None
     if PUBKEY in args:
         session_id = args[PUBKEY]
     if CLOSED_GROUP in args:
         closed_group_ids = args[CLOSED_GROUP]
 
-    if closed_group_ids and session_id:
+    if session_id:
+        closed_group = None
         for closed_group_id in closed_group_ids:
             closed_group = PN_helper_v2.subscribe_closed_group(closed_group_id, session_id)
         if closed_group:
@@ -145,7 +146,7 @@ def unsubscribe_closed_group():
             },]}
         )
         else:
-            return jsonify({CODE: 0, MSG: SUCCESS, subResponses: [
+            return jsonify({CODE: 0, MSG: SUCCESS, "subResponses": [
             {
                 "success": False, "error":1, "message": "Subscribed to closed group successfully."
             },]}
@@ -189,12 +190,16 @@ def receive_encrypted_body(request):
         # Base64デコード
         client_public_key_bytes = b64decode(ephemeral_public_key_b64)
         sealed_box_bytes = b64decode(sealed_box_b64)
+        #logger.info(ephemeral_public_key_b64)
+        #logger.info(sealed_box_b64)
 
         # クライアントの公開鍵オブジェクトを生成
         client_public_key = x25519.X25519PublicKey.from_public_bytes(client_public_key_bytes)
+        #logger.info(client_public_key)
 
         # 鍵交換で共有秘密を導出
         shared_secret = server_private_key.exchange(client_public_key)
+        #logger.info(shared_secret)
 
         # 共通鍵をHKDFから導出（saltとinfoはSwiftと同じにする必要がある）
         symmetric_key = HKDF(
@@ -203,18 +208,23 @@ def receive_encrypted_body(request):
             salt=b"",            # Swift側と一致させる
             info=b"",            # Swift側と一致させる
         ).derive(shared_secret)
+        #logger.info(symmetric_key)
 
         # SealedBoxを復号
         nonce = sealed_box_bytes[:12]
         ciphertext = sealed_box_bytes[12:]
+        #logger.info(f"Nonce extracted (hex): {nonce.hex()}")
+        #logger.info(f"Ciphertext extracted (hex): {ciphertext.hex()}")
+        #logger.info(f"Symmetric key for decryption (hex): {symmetric_key.hex()}")
 
         chacha = ChaCha20Poly1305(symmetric_key)
         plaintext = chacha.decrypt(nonce, ciphertext, associated_data=None)
-        #logger.info(plaintext)
+        #logger.info(f"Decrypted plaintext (raw bytes): {plaintext}")
+        #logger.info(f"Decrypted plaintext (UTF-8 decoded): {plaintext.decode('utf-8')}")
         return json.loads(plaintext.decode('utf-8'))
 
     except Exception as e:
-        logger.info(e)
+        logger.info(str(e))
         return {
             "status": "error",
             "message": str(e)

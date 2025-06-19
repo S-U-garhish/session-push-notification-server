@@ -5,9 +5,9 @@ from uuid import uuid4
 from aioapns import APNs, NotificationRequest, PushType
 from aioapns.common import NotificationResult
 from utils import *
-#import firebase_admin
-#from firebase_admin import credentials, messaging
-#from firebase_admin.exceptions import *
+import firebase_admin
+from firebase_admin import credentials, messaging
+from firebase_admin.exceptions import *
 from databaseModelV2 import *
 from databaseHelperV2 import *
 from pushNotificationStats import *
@@ -20,7 +20,7 @@ class PushNotificationHelperV2:
         self.apns = APNs(
             client_cert='./apns-cert.pem',
             use_sandbox=False)
-        #self.firebase_app = firebase_admin.initialize_app(credentials.Certificate(FIREBASE_TOKEN))
+        self.firebase_app = firebase_admin.initialize_app(credentials.Certificate(FIREBASE_TOKEN))
         self.message_queue = Queue()
         self.push_fails = {}
         self.logger = logger
@@ -155,7 +155,7 @@ class PushNotificationHelperV2:
                 if device_for_push:
                     for device_token in device_for_push.tokens:
                         #self.logger.info(device_token)
-                        if True:
+                        if is_ios_device_token(device_token):
                             request = NotificationRequest(
                                 device_token=device_token,
                                 message = {
@@ -196,10 +196,34 @@ class PushNotificationHelperV2:
         try:
             #self.logger.info(f'Notification length = {len(notifications_ios)}.')
             await self.execute_push_ios(notifications_ios)
-            #self.execute_push_android(notifications_android)
+            self.execute_push_android(notifications_android)
         except Exception as e:
             self.logger.info('Something wrong happened when try to push notifications.')
             self.logger.exception(e)
+
+    def execute_push_android(self, notifications):
+        if len(notifications) == 0:
+            return
+        self.logger.info(f"Push {len(notifications)} notifications for Android.")
+        self.stats_data.increment_android_pn(len(notifications))
+        results = None
+        try:
+            results = messaging.send_all(messages=notifications, app=self.firebase_app)
+        except FirebaseError as e:
+            self.logger.error(e.cause)
+        except Exception as e:
+            self.logger.exception(e)
+
+        if results is not None:
+            for i in range(len(notifications)):
+                response = results.responses[i]
+                token = notifications[i].token
+                if not response.success:
+                    error = response.exception
+                    self.logger.exception(error)
+                    self.handle_fail_result(token, ("HttpError", ""))
+                else:
+                    self.push_fails[token] = 0
 
     async def execute_push_ios(self, notifications):
         if len(notifications) == 0:
